@@ -1,19 +1,35 @@
+use ::serenity::{all::ClientBuilder, Client};
 use dotenv::dotenv;
-use serenity::model::i
-use env_logger;
-use log;
-use serenity::async_trait;
-use serenity::model::channel::Message;
-use serenity::prelude::*;
+use log::error;
+use poise::serenity_prelude as serenity;
+
+struct Data {} // User data, which is stored and accessible in all command invocations
+type Error = Box<dyn std::error::Error + Send + Sync>;
+type Context<'a> = poise::Context<'a, Data, Error>;
+
+/// Displays your or another user's account creation date
+#[poise::command(slash_command, prefix_command)]
+async fn age(
+    ctx: Context<'_>,
+    #[description = "Selected user"] user: Option<serenity::User>,
+) -> Result<(), Error> {
+    let u = user.as_ref().unwrap_or_else(|| ctx.author());
+    let response = format!("{}'s account was created at {}", u.name, u.created_at());
+    ctx.say(response).await?;
+    Ok(())
+}
 
 #[tokio::main]
 async fn main() {
     init_logging();
 
-    // Login with a bot token from the environment
     let token: String = read_bot_token();
-    let client: Client = init_client(&token).await;
-    start_client(client).await;
+    let mut client: Client = init_client(&token).await;
+
+    // Start the bot
+    if let Err(e) = client.start().await {
+        error!("Failed to start the client: {e}");
+    }
 }
 
 /// Initializes the logger.
@@ -33,37 +49,23 @@ fn read_bot_token() -> String {
 
 /// Initializes the serenity Discord bot client object.
 async fn init_client(token: &str) -> Client {
-    // Set gateway intents, which decides what events the bot will be notified about
-    let intents = GatewayIntents::GUILD_MESSAGES
-        | GatewayIntents::DIRECT_MESSAGES
-        | GatewayIntents::MESSAGE_CONTENT;
+    let intents = serenity::GatewayIntents::non_privileged();
 
-    // Create a new instance of the Client, logging in as a bot.
-    Client::builder(&token, intents)
-        .event_handler(Handler)
+    let framework = poise::Framework::builder()
+        .options(poise::FrameworkOptions {
+            commands: vec![age()],
+            ..Default::default()
+        })
+        .setup(|ctx, _ready, framework| {
+            Box::pin(async move {
+                poise::builtins::register_globally(ctx, &framework.options().commands).await?;
+                Ok(Data {})
+            })
+        })
+        .build();
+
+    serenity::ClientBuilder::new(token, intents)
+        .framework(framework)
         .await
-        .expect("Error creating client.")
-}
-
-/// Starts up the client, and listens for events.
-async fn start_client(mut client: Client) {
-    // Start listening for events by starting a single shard
-    if let Err(why) = client.start().await {
-        println!("Client error: {why:?}");
-    }
-}
-
-struct Handler;
-
-#[async_trait]
-impl EventHandler for Handler {
-    async fn message(&self, ctx: Context, msg: Message) {
-        if msg.content == "!ping" {
-            if let Err(why) = msg.channel_id.say(&ctx.http, "Pong!").await {
-                println!("Error sending message: {why:?}");
-            }
-        }
-    }
-
-    async fn interaction_create(&self, ctx: Context, interaction: Interaction)
+        .expect("Failed to create client.")
 }
